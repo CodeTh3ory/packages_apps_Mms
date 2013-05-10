@@ -26,6 +26,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.ActivityNotFoundException;
 import android.content.ContentUris;
 import android.content.Context;
 import android.content.DialogInterface;
@@ -402,8 +403,8 @@ public class MessageUtils {
         }
     }
 
-    public static int getAttachmentType(SlideshowModel model) {
-        if (model == null) {
+    public static int getAttachmentType(SlideshowModel model, MultimediaMessagePdu mmp) {
+        if (model == null || mmp == null) {
             return MessageItem.ATTACHMENT_TYPE_NOT_LOADED;
         }
 
@@ -430,6 +431,12 @@ public class MessageUtils {
             }
 
             if (slide.hasText()) {
+                return WorkingMessage.TEXT;
+            }
+
+            // Handle the multimedia message only has subject
+            String subject = mmp.getSubject() != null ? mmp.getSubject().getString() : null;
+            if (!TextUtils.isEmpty(subject)) {
                 return WorkingMessage.TEXT;
             }
         }
@@ -484,12 +491,16 @@ public class MessageUtils {
     }
 
     public static void recordSound(Activity activity, int requestCode, long sizeLimit) {
-        Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
-        intent.setType(ContentType.AUDIO_AMR);
-        intent.setClassName("com.android.soundrecorder",
-                "com.android.soundrecorder.SoundRecorder");
-        intent.putExtra(android.provider.MediaStore.Audio.Media.EXTRA_MAX_BYTES, sizeLimit);
-        activity.startActivityForResult(intent, requestCode);
+        try {
+            Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+            intent.setType(ContentType.AUDIO_AMR);
+            intent.setClassName("com.android.soundrecorder",
+                    "com.android.soundrecorder.SoundRecorder");
+            intent.putExtra(android.provider.MediaStore.Audio.Media.EXTRA_MAX_BYTES, sizeLimit);
+            activity.startActivityForResult(intent, requestCode);
+        } catch (ActivityNotFoundException e) {
+            Toast.makeText(activity, R.string.record_sound_error_alert, Toast.LENGTH_LONG).show();
+        }
     }
 
     public static void recordVideo(Activity activity, int requestCode, long sizeLimit) {

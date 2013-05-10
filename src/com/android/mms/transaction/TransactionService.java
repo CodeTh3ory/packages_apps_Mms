@@ -455,8 +455,10 @@ public class TransactionService extends Service implements Observer {
             if (Log.isLoggable(LogTag.TRANSACTION, Log.VERBOSE)) {
                 Log.v(TAG, "update: broadcast transaction result " + result);
             }
+
             // Broadcast the result of the transaction.
             sendBroadcast(intent);
+
         } finally {
             transaction.detach(this);
             stopSelf(serviceId);

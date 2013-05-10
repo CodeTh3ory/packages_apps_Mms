@@ -50,6 +50,13 @@
     <!-- Needed for QuickMessage -->
     <uses-permission android:name="android.permission.DISABLE_KEYGUARD" />
 
+    <!-- Grant permission to system apps to access receiver -->
+    <permission android:name="android.permission.MMS_PUSH"
+                android:protectionLevel="signatureOrSystem"
+                android:label="@string/label_mms_push"
+                android:description="@string/desc_mms_push"/>
+    <uses-permission android:name="android.permission.MMS_PUSH"/>
+
     <application android:name="MmsApp"
             android:label="@string/app_label"
             android:icon="@mipmap/ic_launcher_smsmms"
@@ -117,6 +124,11 @@
                <action android:name="android.intent.action.SEND" />
                <category android:name="android.intent.category.DEFAULT" />
                <data android:mimeType="image/*" />
+           </intent-filter>
+           <intent-filter>
+               <action android:name="android.intent.action.SEND" />
+               <category android:name="android.intent.category.DEFAULT" />
+               <data android:mimeType="text/plain" />
            </intent-filter>
            <intent-filter>
                <action android:name="android.intent.action.SEND_MULTIPLE" />
@@ -205,6 +217,13 @@
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
+        </receiver>
+
+        <receiver android:name=".transaction.MmsSystemPushMsgReceiver"
+                  android:permission="android.permission.MMS_PUSH">
+                  <intent-filter>
+                      <action android:name="android.intent.action.MMS_PUSH" />
+                  </intent-filter>
         </receiver>
 
         <activity android:name=".ui.ManageSimMessages"
@@ -372,17 +391,6 @@
             android:exported="true" />
 
          <receiver android:name=".quickmessage.ClearAllReceiver" />
-
-        <!-- "Blacklist settings" UI, used only on voice-capable phone devices. -->
-        <activity android:name="BlacklistSetting"
-                android:exported="false"
-                android:label="@string/blacklist_title"
-                android:configChanges="orientation|screenSize|keyboardHidden"
-                android:theme="@android:style/Theme.Holo.DialogWhenLarge">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-            </intent-filter>
-        </activity>
 
         </application>
 </manifest>

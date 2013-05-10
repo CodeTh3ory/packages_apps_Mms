@@ -51,7 +51,6 @@ import android.os.Handler;
 import android.os.Parcel;
 import android.os.Parcelable;
 import android.preference.PreferenceManager;
-import android.provider.Settings;
 import android.provider.Telephony.Mms;
 import android.provider.Telephony.Sms;
 import android.telephony.TelephonyManager;
@@ -65,6 +64,7 @@ import android.util.Log;
 import android.widget.Toast;
 
 import com.android.mms.LogTag;
+import com.android.mms.MmsConfig;
 import com.android.mms.R;
 import com.android.mms.data.Contact;
 import com.android.mms.data.Conversation;
@@ -298,6 +298,9 @@ public class MessagingNotification {
         if (delivery != null) {
             delivery.deliver(context, isStatusMessage);
         }
+
+        notificationSet.clear();
+        threads.clear();
     }
 
     /**
@@ -796,6 +799,9 @@ public class MessagingNotification {
             Bitmap attachmentBitmap,
             Contact contact,
             int attachmentType) {
+        if (MmsConfig.isSuppressedSprintVVM(address)) {
+            return null;
+        }
         Intent clickIntent = ComposeMessageActivity.createIntent(context, threadId);
         clickIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK
                 | Intent.FLAG_ACTIVITY_SINGLE_TOP
@@ -807,7 +813,6 @@ public class MessagingNotification {
                 0, senderInfo.length() - 2);
         CharSequence ticker = buildTickerMessage(
                 context, address, subject, message);
-
         return new NotificationInfo(isSms,
                 clickIntent, message, subject, ticker, timeMillis,
                 senderInfoName, attachmentBitmap, contact, attachmentType, threadId);
@@ -948,10 +953,9 @@ public class MessagingNotification {
             taskStackBuilder.addNextIntent(mostRecentNotification.mClickIntent);
         }
         // Always have to set the small icon or the notification is ignored
-        if (Settings.System.getInt(context.getContentResolver(),
-                Settings.System.MMS_BREATH, 0) == 1) {
+        if (sp.getBoolean(MessagingPreferenceActivity.MMS_BREATH, false)) {
                noti.setSmallIcon(R.drawable.stat_notify_sms_breath);
-           } else {    
+           } else {
                noti.setSmallIcon(R.drawable.stat_notify_sms);
         }
 
@@ -1009,8 +1013,8 @@ public class MessagingNotification {
             }
         }
 
-        // Set light defaults
         defaults |= Notification.DEFAULT_LIGHTS;
+
         noti.setDefaults(defaults);
 
         // set up delete intent
@@ -1159,6 +1163,10 @@ public class MessagingNotification {
                         inboxStyle.addLine(info.formatInboxMessage(context));
                     }
                     notification = inboxStyle.build();
+
+                    uniqueThreads.clear();
+                    mostRecentNotifPerThread.clear();
+
                     if (DEBUG) {
                         Log.d(TAG, "updateNotification: multi messages," +
                                 " showing inboxStyle notification");
@@ -1186,6 +1194,7 @@ public class MessagingNotification {
 
         // Post the notification
         nm.notify(NOTIFICATION_ID, notification);
+
     }
 
     protected static CharSequence buildTickerMessage(

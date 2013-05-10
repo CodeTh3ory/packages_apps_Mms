@@ -100,6 +100,7 @@ public class ConversationList extends ListActivity implements DraftCache.OnDraft
     public static final int MENU_VIEW                 = 1;
     public static final int MENU_VIEW_CONTACT         = 2;
     public static final int MENU_ADD_TO_CONTACTS      = 3;
+    public static final int MENU_MARK_ALL_READ        = 4;
 
     public static boolean mIsRunning;
 
@@ -172,8 +173,8 @@ public class ConversationList extends ListActivity implements DraftCache.OnDraft
     @Override
     public void onPause() {
         super.onPause();
-
         mIsRunning = false;
+
         // Remember where the list is scrolled to so we can restore the scroll position
         // when we come back to this activity and *after* we complete querying for the
         // conversations.
@@ -429,6 +430,16 @@ public class ConversationList extends ListActivity implements DraftCache.OnDraft
         if (item != null) {
             item.setVisible(mListAdapter.getCount() > 0);
         }
+        item = menu.findItem(R.id.action_mark_all_read);
+        if (item != null) {
+            if (Conversation.areAllConversationsRead(getApplicationContext()) == 0) {
+                item.setVisible(false);
+                item.setEnabled(false);
+            } else {
+                item.setVisible(true);
+                item.setEnabled(true);
+            }
+        }
         if (!LogTag.DEBUG_DUMP) {
             item = menu.findItem(R.id.action_debug_dump);
             if (item != null) {
@@ -455,6 +466,9 @@ public class ConversationList extends ListActivity implements DraftCache.OnDraft
             case R.id.action_delete_all:
                 // The invalid threadId of -1 means all threads here.
                 confirmDeleteThread(-1L, mQueryHandler);
+                break;
+            case R.id.action_mark_all_read:
+                Conversation.markAllConversationsAsRead(getApplicationContext());
                 break;
             case R.id.action_settings:
                 Intent intent = new Intent(this, MessagingPreferenceActivity.class);
@@ -552,6 +566,7 @@ public class ConversationList extends ListActivity implements DraftCache.OnDraft
                 }
             }
             menu.add(0, MENU_DELETE, 0, R.string.menu_delete);
+            menu.add(0, MENU_MARK_ALL_READ, 0, R.string.menu_mark_all_read);
         }
     };
 

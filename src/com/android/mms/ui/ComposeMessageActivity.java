@@ -59,6 +59,10 @@ import android.gesture.GestureOverlayView;
 import android.gesture.GestureOverlayView.OnGesturePerformedListener;
 import android.gesture.Prediction;
 import android.graphics.drawable.Drawable;
+import android.hardware.SensorEventListener;
+import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorManager;
 import android.media.RingtoneManager;
 import android.net.Uri;
 import android.os.AsyncTask;
@@ -72,9 +76,11 @@ import android.preference.PreferenceManager;
 import android.provider.CalendarContract;
 import android.provider.CalendarContract.Events;
 import android.provider.ContactsContract;
+import android.provider.ContactsContract.CommonDataKinds;
 import android.provider.ContactsContract.CommonDataKinds.Email;
 import android.provider.ContactsContract.CommonDataKinds.Phone;
 import android.provider.ContactsContract.Contacts;
+import android.provider.ContactsContract.Data;
 import android.provider.ContactsContract.Intents;
 import android.provider.ContactsContract.QuickContact;
 import android.provider.MediaStore.Images;
@@ -147,6 +153,7 @@ import com.android.mms.templates.TemplatesProvider.Template;
 import com.android.mms.transaction.MessagingNotification;
 import com.android.mms.ui.MessageListView.OnSizeChangedListener;
 import com.android.mms.ui.MessageUtils.ResizeImageResultCallback;
+import com.android.mms.ui.MessagingPreferenceActivity;
 import com.android.mms.ui.RecipientsEditor.RecipientContextMenuInfo;
 import com.android.mms.util.DraftCache;
 import com.android.mms.util.EmojiParser;
@@ -195,7 +202,7 @@ import java.util.regex.Pattern;
  */
 public class ComposeMessageActivity extends Activity
         implements View.OnClickListener, TextView.OnEditorActionListener,
-        MessageStatusListener, Contact.UpdateListener, OnGesturePerformedListener,
+        MessageStatusListener, Contact.UpdateListener, OnGesturePerformedListener, SensorEventListener,
         LoaderManager.LoaderCallbacks<Cursor>  {
     public static final int REQUEST_CODE_ATTACH_IMAGE     = 100;
     public static final int REQUEST_CODE_TAKE_PICTURE     = 101;
@@ -203,10 +210,11 @@ public class ComposeMessageActivity extends Activity
     public static final int REQUEST_CODE_TAKE_VIDEO       = 103;
     public static final int REQUEST_CODE_ATTACH_SOUND     = 104;
     public static final int REQUEST_CODE_RECORD_SOUND     = 105;
-    public static final int REQUEST_CODE_CREATE_SLIDESHOW = 106;
-    public static final int REQUEST_CODE_ECM_EXIT_DIALOG  = 107;
-    public static final int REQUEST_CODE_ADD_CONTACT      = 108;
-    public static final int REQUEST_CODE_PICK             = 109;
+    public static final int REQUEST_CODE_ATTACH_CONTACT   = 106;
+    public static final int REQUEST_CODE_CREATE_SLIDESHOW = 107;
+    public static final int REQUEST_CODE_ECM_EXIT_DIALOG  = 108;
+    public static final int REQUEST_CODE_ADD_CONTACT      = 109;
+    public static final int REQUEST_CODE_PICK             = 110;
 
     private static final String TAG = "Mms/compose";
 
@@ -358,6 +366,13 @@ public class ComposeMessageActivity extends Activity
     private double mGestureSensitivity;
 
     private int mInputMethod;
+
+    private SensorManager mSensorManager;
+    private int SensorOrientationY;
+    private int SensorProximity;
+    private int oldProximity;
+    private boolean initProx;
+    private boolean proxChanged;
 
     private int mLastSmoothScrollPosition;
     private boolean mScrollOnSend;      // Flag that we need to scroll the list to the end.
@@ -1629,7 +1644,7 @@ public class ComposeMessageActivity extends Activity
             if (DrmUtils.isDrmType(type)) {
                 // All parts (but there's probably only a single one) have to be successful
                 // for a valid result.
-                result &= copyPart(part, Long.toHexString(msgId));
+                result &= copyPart(part, getString(R.string.save_ringtone_filename_fallback));
             }
         }
         return result;
@@ -1714,7 +1729,7 @@ public class ComposeMessageActivity extends Activity
     }
 
     /**
-     * Copies media from an Mms to the "download" directory on the SD card. If any of the parts
+     * Copies media from an Mms to a directory on the SD card. If any of the parts
      * are audio types, drm'd or not, they're copied to the "Ringtones" directory.
      * @param msgId
      */
@@ -1736,7 +1751,7 @@ public class ComposeMessageActivity extends Activity
             PduPart part = body.getPart(i);
 
             // all parts have to be successful for a valid result.
-            result &= copyPart(part, Long.toHexString(msgId));
+            result &= copyPart(part, getString(R.string.copy_to_sdcard_filename_fallback));
         }
         return result;
     }
@@ -1787,9 +1802,15 @@ public class ComposeMessageActivity extends Activity
                 // Depending on the location, there may be an
                 // extension already on the name or not. If we've got audio, put the attachment
                 // in the Ringtones directory.
+                SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(this);
+                String mMmsDir = prefs.getString(MessagingPreferenceActivity.MMS_SAVE_LOCATION, "download");
                 String dir = Environment.getExternalStorageDirectory() + "/"
                                 + (ContentType.isAudioType(type) ? Environment.DIRECTORY_RINGTONES :
                                     Environment.DIRECTORY_DOWNLOADS)  + "/";
+                if (!mMmsDir.isEmpty()) {
+                    dir = Environment.getExternalStorageDirectory() + "/"
+                                    + prefs.getString(MessagingPreferenceActivity.MMS_SAVE_LOCATION, "download")  + "/";
+                }
                 String extension;
                 int index;
                 if ((index = fileName.lastIndexOf('.')) == -1) {
@@ -1810,7 +1831,17 @@ public class ComposeMessageActivity extends Activity
                     return false;
                 }
 
-                fout = new FileOutputStream(file);
+                try {
+                    fout = new FileOutputStream(file);
+                } catch (IOException e) {
+                    Log.e(TAG, "IOException caught while opening output stream", e);
+                    if (fallback.equals(fileName)) {
+                        return false;
+                    }
+                    fileName = fallback;
+                    file = getUniqueDestination(dir + fileName, extension);
+                    fout = new FileOutputStream(file);
+                }
 
                 byte[] buffer = new byte[8000];
                 int size = 0;
@@ -2098,6 +2129,59 @@ public class ComposeMessageActivity extends Activity
         if (TRACE) {
             android.os.Debug.startMethodTracing("compose");
         }
+    }
+
+    @Override
+    public void onSensorChanged(SensorEvent event) {
+
+    switch (event.sensor.getType()) {
+    case Sensor.TYPE_ORIENTATION:
+        SensorOrientationY = (int) event.values[SensorManager.DATA_Y];
+        break;
+    case Sensor.TYPE_PROXIMITY:
+        int currentProx = (int) event.values[0];
+        if (initProx) {
+            SensorProximity = currentProx;
+            initProx = false;
+        } else {
+            if( SensorProximity > 0 && currentProx == 0){
+                proxChanged = true;
+            }
+        }
+        SensorProximity = currentProx;
+        break;
+    }
+
+    if (rightOrientation(SensorOrientationY) && SensorProximity == 0 && proxChanged ) {
+        if (getRecipients().isEmpty() == false) {
+            // unregister Listener to don't let the onSesorChanged run the
+            // whole time
+            mSensorManager.unregisterListener(this, mSensorManager
+                    .getDefaultSensor(Sensor.TYPE_ORIENTATION));
+            mSensorManager.unregisterListener(this,
+                    mSensorManager.getDefaultSensor(Sensor.TYPE_PROXIMITY));
+
+            // get number and attach it to an Intent.ACTION_CALL, then start
+            // the Intent
+            String number = getRecipients().get(0).getNumber();
+            Intent dialIntent = new Intent(Intent.ACTION_CALL);
+            dialIntent.setData(Uri.fromParts("tel", number, null));
+            dialIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(dialIntent);
+        }
+    }
+    }
+
+    @Override
+    public void onAccuracyChanged(Sensor sensor, int accuracy) {
+    }
+
+    public boolean rightOrientation(int orientation) {
+    if (orientation < -50 && orientation > -130) {
+        return true;
+    } else {
+        return false;
+    }
     }
 
     private void showSubjectEditor(boolean show) {
@@ -2454,6 +2538,9 @@ public class ComposeMessageActivity extends Activity
     protected void onResume() {
         super.onResume();
 
+        // Init settings
+        initResourceRefs();
+
         // OLD: get notified of presence updates to update the titlebar.
         // NEW: we are using ContactHeaderWidget which displays presence, but updating presence
         //      there is out of our control.
@@ -2477,7 +2564,24 @@ public class ComposeMessageActivity extends Activity
             }
         }, 100);
 
-        // Load the selected input type
+        try {
+        if(MessagingPreferenceActivity.getDirectCallEnabled(ComposeMessageActivity.this)) {
+            SensorOrientationY = 0;
+            SensorProximity = 0;
+            proxChanged = false;
+            initProx = true;
+            mSensorManager = (SensorManager) getSystemService(SENSOR_SERVICE);
+            mSensorManager.registerListener(this,
+                        mSensorManager.getDefaultSensor(Sensor.TYPE_ORIENTATION),
+                        SensorManager.SENSOR_DELAY_UI);
+            mSensorManager.registerListener(this,
+                        mSensorManager.getDefaultSensor(Sensor.TYPE_PROXIMITY),
+                        SensorManager.SENSOR_DELAY_UI);
+        }
+    } catch (Exception e) {
+        Log.w("ERROR", e.toString());
+    }
+
         SharedPreferences prefs = PreferenceManager
                 .getDefaultSharedPreferences((Context) ComposeMessageActivity.this);
         mInputMethod = Integer.parseInt(prefs.getString(MessagingPreferenceActivity.INPUT_TYPE,
@@ -2510,6 +2614,16 @@ public class ComposeMessageActivity extends Activity
 
         removeRecipientsListeners();
 
+    try {
+        if(MessagingPreferenceActivity.getDirectCallEnabled(ComposeMessageActivity.this)) {
+            mSensorManager.unregisterListener(this,
+                        mSensorManager.getDefaultSensor(Sensor.TYPE_ORIENTATION));
+            mSensorManager.unregisterListener(this,
+                        mSensorManager.getDefaultSensor(Sensor.TYPE_PROXIMITY));
+        }
+    } catch (Exception e) {
+        Log.w("ERROR", e.toString());
+    }
         // remove any callback to display a progress spinner
         if (mAsyncDialog != null) {
             mAsyncDialog.clearPendingProgressDialog();
@@ -3085,6 +3199,12 @@ public class ComposeMessageActivity extends Activity
                 editSlideshow();
                 break;
 
+            case AttachmentTypeSelectorAdapter.ADD_CONTACT_INFO:
+                final Intent intent = new Intent(Intent.ACTION_PICK,
+                        Contacts.CONTENT_URI);
+                startActivityForResult(intent, REQUEST_CODE_ATTACH_CONTACT);
+                break;
+
             default:
                 break;
         }
@@ -3237,6 +3357,10 @@ public class ComposeMessageActivity extends Activity
                 }
                 break;
 
+            case REQUEST_CODE_ATTACH_CONTACT:
+                showContactInfoDialog(data.getData());
+                break;
+
             case REQUEST_CODE_ECM_EXIT_DIALOG:
                 boolean outOfEmergencyMode = data.getBooleanExtra(EXIT_ECM_RESULT, false);
                 if (outOfEmergencyMode) {
@@ -3312,6 +3436,62 @@ public class ComposeMessageActivity extends Activity
                 handler.post(populateWorker);
             }
         }, "ComoseMessageActivity.processPickResult").start();
+    }
+
+    private void showContactInfoDialog(Uri contactUri) {
+
+        String contactId = null,
+               displayName = null;
+        Cursor contactCursor = getContentResolver().query(contactUri,
+                new String[] {Contacts._ID, Contacts.DISPLAY_NAME}, null, null, null);
+        if(contactCursor.moveToFirst()){
+            contactId = contactCursor.getString(0);
+            displayName = contactCursor.getString(1);
+        }
+        else {
+            Toast.makeText(this, R.string.cannot_find_contact, Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        final Cursor entryCursor = getContentResolver().query(Data.CONTENT_URI,
+                new String[] {
+                    Data._ID,
+                    Data.DATA1,
+                    Data.DATA2,
+                    Data.DATA3,
+                    Data.MIMETYPE
+                },
+                Data.CONTACT_ID + "=? AND ("
+                        + Data.MIMETYPE + "=? OR "
+                        + Data.MIMETYPE + "=? OR "
+                        + Data.MIMETYPE + "=? OR "
+                        + Data.MIMETYPE + "=?)",
+                new String[] {
+                    contactId,
+                    CommonDataKinds.Phone.CONTENT_ITEM_TYPE,
+                    CommonDataKinds.Email.CONTENT_ITEM_TYPE,
+                    CommonDataKinds.StructuredPostal.CONTENT_ITEM_TYPE,
+                    CommonDataKinds.Website.CONTENT_ITEM_TYPE
+                },
+                Data.DATA2
+            );
+
+        ContactEntryAdapter adapter = new ContactEntryAdapter(this, entryCursor);
+
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setIcon(R.drawable.ic_dialog_attach);
+        builder.setTitle(displayName);
+        builder.setAdapter(adapter, new DialogInterface.OnClickListener() {
+            public void onClick(DialogInterface dialog, int which) {
+                entryCursor.moveToPosition(which);
+                String value = entryCursor.getString(entryCursor.getColumnIndex(Data.DATA1));
+                int start = mTextEditor.getSelectionStart();
+                int end = mTextEditor.getSelectionEnd();
+                mTextEditor.getText().replace(Math.min(start, end), Math.max(start, end), value);
+                dialog.dismiss();
+            }
+        });
+        builder.show();
     }
 
     private final ResizeImageResultCallback mResizeImageCallback = new ResizeImageResultCallback() {
@@ -3574,12 +3754,13 @@ public class ComposeMessageActivity extends Activity
 
         CharSequence text = mWorkingMessage.getText();
 
+        SharedPreferences prefs = PreferenceManager
+                .getDefaultSharedPreferences((Context) ComposeMessageActivity.this);
+
         // TextView.setTextKeepState() doesn't like null input.
+        boolean enableEmojis = prefs.getBoolean(MessagingPreferenceActivity.ENABLE_EMOJIS, false);
         if (text != null) {
             // Restore the emojis if necessary
-            SharedPreferences prefs = PreferenceManager
-                    .getDefaultSharedPreferences((Context) ComposeMessageActivity.this);
-            boolean enableEmojis = prefs.getBoolean(MessagingPreferenceActivity.ENABLE_EMOJIS, false);
             if (enableEmojis) {
                 mTextEditor.setTextKeepState(EmojiParser.getInstance().addEmojiSpans(text));
             } else {
@@ -3589,6 +3770,18 @@ public class ComposeMessageActivity extends Activity
             mTextEditor.setSelection(mTextEditor.length());
         } else {
             mTextEditor.setText("");
+        }
+
+        boolean enableQuickEmojis = prefs.getBoolean(MessagingPreferenceActivity.ENABLE_QUICK_EMOJIS, false);
+        if (enableQuickEmojis && enableEmojis) {
+            ImageButton quickEmojis = (ImageButton) mBottomPanel.findViewById(R.id.quick_emoji_button_mms);
+            quickEmojis.setVisibility(View.VISIBLE);
+            quickEmojis.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    showEmojiDialog();
+                }
+            });
         }
     }
 
@@ -3866,6 +4059,8 @@ public class ComposeMessageActivity extends Activity
         mTextEditor = (EditText) findViewById(R.id.embedded_text_editor);
         mTextEditor.setOnEditorActionListener(this);
         mTextEditor.addTextChangedListener(mTextEditorWatcher);
+        SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(this);
+        mTextEditor.setMaxLines(prefs.getInt(MessagingPreferenceActivity.TEXT_AREA_SIZE, 3));
         mTextEditor.setFilters(new InputFilter[] {
                 new LengthFilter(MmsConfig.getMaxTextLimit())});
         mTextCounter = (TextView) findViewById(R.id.text_counter);
@@ -4562,6 +4757,10 @@ public class ComposeMessageActivity extends Activity
                     // Update the notification for failed messages since they
                     // may be deleted.
                     updateSendFailedNotification();
+                    // Return to message list if the last message on thread is being deleted
+                    if (mMsgListAdapter.getCount() == 1) {
+                        finish();
+                    }
                     break;
             }
             // If we're deleting the whole conversation, throw away
@@ -4691,10 +4890,19 @@ public class ComposeMessageActivity extends Activity
             final EditText editText = (EditText) mEmojiView.findViewById(R.id.emoji_edit_text);
             final Button button = (Button) mEmojiView.findViewById(R.id.emoji_button);
 
+            SharedPreferences prefs = PreferenceManager
+                    .getDefaultSharedPreferences((Context) ComposeMessageActivity.this);
+            final boolean useSoftBankEmojiEncoding = prefs.getBoolean(MessagingPreferenceActivity.SOFTBANK_EMOJIS, false);
+
             gridView.setOnItemClickListener(new OnItemClickListener() {
                 public void onItemClick(AdapterView<?> parent, View v, int position, long id) {
-                    // We use the new unified Unicode 6.1 emoji code points
-                    CharSequence emoji = EmojiParser.getInstance().addEmojiSpans(EmojiParser.mEmojiTexts[position]);
+                    // We use the new unified Unicode 6.1 emoji code points by default
+                    CharSequence emoji;
+                    if (useSoftBankEmojiEncoding) {
+                        emoji = EmojiParser.getInstance().addEmojiSpans(EmojiParser.mSoftbankEmojiTexts[position]);
+                    } else {
+                        emoji = EmojiParser.getInstance().addEmojiSpans(EmojiParser.mEmojiTexts[position]);
+                    }
                     editText.append(emoji);
                 }
             });
@@ -4703,8 +4911,13 @@ public class ComposeMessageActivity extends Activity
                 @Override
                 public boolean onItemLongClick(AdapterView<?> parent, View view, int position,
                         long id) {
-                    // We use the new unified Unicode 6.1 emoji code points
-                    CharSequence emoji = EmojiParser.getInstance().addEmojiSpans(EmojiParser.mEmojiTexts[position]);
+                    // We use the new unified Unicode 6.1 emoji code points by default
+                    CharSequence emoji;
+                    if (useSoftBankEmojiEncoding) {
+                        emoji = EmojiParser.getInstance().addEmojiSpans(EmojiParser.mSoftbankEmojiTexts[position]);
+                    } else {
+                        emoji = EmojiParser.getInstance().addEmojiSpans(EmojiParser.mEmojiTexts[position]);
+                    }
                     EditText mToInsert;
 
                     // tag edit text to insert to
